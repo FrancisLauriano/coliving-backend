@@ -1,5 +1,6 @@
 # coliving-backend
 
+```plaintext
 coliving-backend/
 ├── app/                       # Código relacionado às funções Lambda
 │   ├── handler.py             # Lambda Handlers para microsserviços
@@ -52,6 +53,7 @@ coliving-backend/
 ├── README.md                  # Documentação do projeto
 ├── requirements.txt           # Dependências gerais do projeto
 └── .gitignore                 # Arquivos e pastas a serem ignorados pelo Git
+```
 
 
 
