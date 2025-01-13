@@ -5,9 +5,10 @@ from config.settings import Config
 from config.database import init_db
 from middlewares.cors import init_cors
 from errors.error_handler import ErrorHandler
-import logging
 from routes.person_routes import person_routes
-from routes.auth_routes import auth_routes  # Importar as rotas de autenticação
+from routes.auth_routes import auth_routes
+from services.import_service import ImportService  # Importação do serviço de importação
+import logging
 
 # Configurar logs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,14 +26,24 @@ def create_app():
     # Inicializar banco de dados e migrações
     init_db(app)
 
+    # Configurar CORS
     init_cors(app)
 
     # Registrar blueprints
     app.register_blueprint(person_routes)
-    app.register_blueprint(auth_routes)  # Registrar as rotas de autenticação
+    app.register_blueprint(auth_routes)
 
     # Tratamento global de erros
     register_error_handlers(app)
+
+    # Importar dados iniciais da API externa
+    with app.app_context():
+        try:
+            logger.info("Iniciando a importação de dados da API externa...")
+            result = ImportService.import_people()
+            logger.info(f"Importação concluída: {result}")
+        except Exception as e:
+            logger.error(f"Erro ao importar dados da API externa: {e}")
 
     @app.route("/")
     def home():
@@ -53,7 +64,6 @@ def register_error_handlers(app):
     app.register_error_handler(500, ErrorHandler.handle_internal_server_error)
     app.register_error_handler(403, ErrorHandler.handle_invalid_token_error)
     app.register_error_handler(Exception, ErrorHandler.handle_generic_exception)
-
 
 
 if __name__ == "__main__":

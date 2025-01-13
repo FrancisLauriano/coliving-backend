@@ -1,119 +1,152 @@
-# services/person_service.py
-
+# services/person_service.py:
 import logging
+import marshmallow
 from repositories.person_repository import PersonRepository
+from validators.person_validator import PersonSchema
 from utils.encryption_utils import EncryptionUtils
-from validators.person_validator import PersonValidator
-from errors.custom_errors import NotFoundError, ConflictError, InternalServerError
+from errors.custom_errors import NotFoundError, ConflictError, InternalServerError, ValidationError
+from errors.error_handler import ErrorHandler
 
 logger = logging.getLogger(__name__)
 
 class PersonService:
-    """
-    Serviço para a entidade Person.
-    Responsável pela lógica de negócios e integração com o repositório e validadores.
-    """
+    def __init__(self):
+        self.encryption = EncryptionUtils()
+        self.schema = PersonSchema()
 
-    @staticmethod
-    def get_all():
-        """
-        Retorna todas as pessoas do banco de dados.
-        """
+    def _normalize_data(self, data):
+        """Converte campos específicos para letras minúsculas."""
+        for key in ['name', 'email', 'person_type']:
+            if key in data and isinstance(data[key], str):
+                data[key] = data[key].lower()
+        return data
+
+    def get_all(self):
+        """Retorna todas as pessoas cadastradas."""
         try:
             people = PersonRepository.get_all()
-            return [person.to_dict() for person in people]
-        except InternalServerError as e:
-            logger.error(f"Erro ao buscar pessoas: {e}")
-            raise e
+            logger.info("Pessoas obtidas com sucesso.")
+            return people
+        except Exception as e:
+            logger.error(f"Erro inesperado ao buscar pessoas: {e}")
+            raise InternalServerError("Erro inesperado ao buscar pessoas.")
 
-    @staticmethod
-    def get_by_id(person_id):
-        """
-        Busca uma pessoa específica pelo ID.
-        """
+    def get_by_id(self, person_id):
+        """Busca uma pessoa específica pelo ID."""
         try:
+            if not person_id or not isinstance(person_id, str):
+                raise ValidationError(field="person_id", message="ID inválido.")
+
             person = PersonRepository.get_by_id(person_id)
-            return person.to_dict()
-        except NotFoundError as e:
-            logger.warning(f"Pessoa não encontrada: {person_id}")
-            raise e
-        except InternalServerError as e:
-            logger.error(f"Erro ao buscar pessoa com ID {person_id}: {e}")
-            raise e
+            if not person:
+                logger.warning(f"Pessoa com ID {person_id} não encontrada.")
+                raise NotFoundError(resource="Person", message="Pessoa não encontrada.")
+            
+            logger.info(f"Pessoa com ID {person_id} encontrada com sucesso.")
+            return person
+        except ValidationError as err:
+            logger.warning(f"Erro na validação do ID: {err.message}")
+            raise
+        except NotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Erro inesperado ao buscar pessoa {person_id}: {e}")
+            raise InternalServerError("Erro inesperado ao buscar pessoa.")
 
-    @staticmethod
-    def create(data):
-        """
-        Cria uma nova pessoa no banco de dados.
-        """
+    def create(self, data):
+        """Cria uma nova pessoa no banco de dados."""
         try:
-            # Validação dos dados de entrada
-            validator = PersonValidator()
-            validated_data = validator.validate_and_load(data)
+            if not data or not isinstance(data, dict):
+                raise ValidationError(field="data", message="Dados de entrada inválidos.")
 
-            # Criptografar a senha
-            encryption = EncryptionUtils()
-            validated_data["password"] = encryption.encrypt(validated_data["password"])
+            normalized_data = self._normalize_data(data)
 
-            # Criar pessoa no repositório
+            if PersonRepository.get_by_email(normalized_data['email']):
+                logger.warning("Tentativa de criação com e-mail já cadastrado.")
+                raise ConflictError(resource="E-mail", message="E-mail já está cadastrado.")
+
+            try:
+                validated_data = self.schema.load(normalized_data)
+            except marshmallow.exceptions.ValidationError as marshmallow_error:
+                ErrorHandler.handle_marshmallow_errors(marshmallow_error.messages)
+
+            validated_data['password'] = self.encryption.encrypt(validated_data['password'])
             person = PersonRepository.create(validated_data)
-            logger.info(f"Pessoa criada com sucesso: {person.id}")
-            return person.to_dict()
-        except ConflictError as e:
-            logger.warning(f"Conflito ao criar pessoa: {e}")
-            raise e
+            logger.info(f"Pessoa criada com sucesso: ID {person.id}")
+            return person
+        except ValidationError as err:
+            logger.warning(f"Erro na validação de entrada: {err.message}")
+            raise
+        except ConflictError:
+            raise
         except Exception as e:
-            logger.error(f"Erro ao criar pessoa: {e}")
-            raise InternalServerError("Erro ao criar pessoa.")
+            logger.error(f"Erro inesperado ao criar pessoa: {e}")
+            raise InternalServerError("Erro inesperado ao criar pessoa.")
 
-    @staticmethod
-    def update(person_id, data):
-        """
-        Atualiza os dados de uma pessoa existente.
-        """
+    def update(self, person_id, data):
+        """Atualiza os dados de uma pessoa."""
         try:
-            # Buscar pessoa existente
+            if not person_id or not isinstance(person_id, str):
+                raise ValidationError(field="person_id", message="ID inválido.")
+            if not data or not isinstance(data, dict):
+                raise ValidationError(field="data", message="Dados inválidos para atualização.")
+
             person = PersonRepository.get_by_id(person_id)
+            if not person:
+                logger.warning(f"Pessoa com ID {person_id} não encontrada.")
+                raise NotFoundError(resource="Person", message="Pessoa não encontrada.")
 
-            # Validação dos dados de entrada
-            validator = PersonValidator()
-            validated_data = validator.validate_and_load(data)
+            normalized_data = self._normalize_data(data)
 
-            # Atualizar atributos da pessoa
-            for key, value in validated_data.items():
-                if key != "password":  # Evitar sobrescrever a senha diretamente
-                    setattr(person, key, value)
+            if 'email' in normalized_data and normalized_data['email'] != person.email:
+                if PersonRepository.get_by_email(normalized_data['email']):
+                    logger.warning(f"E-mail {normalized_data['email']} já em uso.")
+                    raise ConflictError(resource="E-mail", message="E-mail já está cadastrado.")
 
-            if "password" in validated_data:
-                encryption = EncryptionUtils()
-                person.password = encryption.encrypt(validated_data["password"])
+            try:
+                updated_data = self.schema.load(normalized_data, partial=True)
+            except marshmallow.exceptions.ValidationError as marshmallow_error:
+                ErrorHandler.handle_marshmallow_errors(marshmallow_error.messages)
 
-            # Atualizar pessoa no repositório
+            if 'password' in updated_data:
+                updated_data['password'] = self.encryption.encrypt(updated_data['password'])
+
+            for key, value in updated_data.items():
+                setattr(person, key, value)
+
             updated_person = PersonRepository.update(person)
-            logger.info(f"Pessoa atualizada com sucesso: {updated_person.id}")
-            return updated_person.to_dict()
-        except NotFoundError as e:
-            logger.warning(f"Pessoa não encontrada: {person_id}")
-            raise e
-        except ConflictError as e:
-            logger.warning(f"Conflito ao atualizar pessoa: {e}")
-            raise e
+            logger.info(f"Pessoa {person_id} atualizada com sucesso.")
+            return updated_person
+        except ValidationError as err:
+            logger.warning(f"Erro na validação de entrada: {err.message}")
+            raise
+        except NotFoundError:
+            raise
+        except ConflictError:
+            raise
         except Exception as e:
-            logger.error(f"Erro ao atualizar pessoa: {e}")
-            raise InternalServerError("Erro ao atualizar pessoa.")
+            logger.error(f"Erro inesperado ao atualizar pessoa {person_id}: {e}")
+            raise InternalServerError("Erro inesperado ao atualizar pessoa.")
 
-    @staticmethod
-    def delete(person_id):
-        """
-        Remove uma pessoa do banco de dados pelo ID.
-        """
+    def delete(self, person_id):
+        """Remove uma pessoa pelo ID."""
         try:
+            if not person_id or not isinstance(person_id, str):
+                raise ValidationError(field="person_id", message="ID inválido.")
+
+            person = PersonRepository.get_by_id(person_id)
+            if not person:
+                logger.warning(f"Tentativa de deletar pessoa com ID {person_id} não encontrada.")
+                raise NotFoundError(resource="Person", message="Pessoa não encontrada.")
+
             PersonRepository.delete(person_id)
-            logger.info(f"Pessoa com ID {person_id} removida com sucesso.")
-            return {"message": "Pessoa removida com sucesso."}
-        except NotFoundError as e:
-            logger.warning(f"Pessoa não encontrada para exclusão: {person_id}")
-            raise e
+            logger.info(f"Pessoa {person_id} deletada com sucesso.")
+            return {"message": "Pessoa deletada com sucesso."}
+        except ValidationError as err:
+            logger.warning(f"Erro na validação do ID: {err.message}")
+            raise
+        except NotFoundError:
+            raise
         except Exception as e:
-            logger.error(f"Erro ao excluir pessoa: {e}")
-            raise InternalServerError("Erro ao excluir pessoa.")
+            logger.error(f"Erro inesperado ao deletar pessoa {person_id}: {e}")
+            raise InternalServerError("Erro inesperado ao deletar pessoa.")

@@ -34,6 +34,17 @@ class PersonRepository:
         except SQLAlchemyError as e:
             logger.error(f"Erro ao buscar pessoa com ID {person_id}: {e}")
             raise InternalServerError("Erro ao buscar pessoa no banco de dados.")
+        
+    @staticmethod
+    def get_by_email(email):
+        """ Busca uma pessoa pelo e-mail."""
+        try:
+            person = Person.query.filter_by(email=email).first()
+            return person
+        except SQLAlchemyError as e:
+            logger.error(f"Erro ao buscar pessoa pelo e-mail {email}: {e}")
+            raise InternalServerError("Erro ao buscar pessoa no banco de dados.")
+    
 
     @staticmethod
     def create(data):

@@ -1,5 +1,5 @@
 # services/import_service.py:
-
+import json
 import requests
 import logging
 from repositories.person_repository import PersonRepository
@@ -33,32 +33,47 @@ class ImportService:
             response = requests.get(url)
             response.raise_for_status()  # Lança uma exceção para erros HTTP
 
-            # Extrai os dados retornados pela API
-            data = response.json().get("clientes", [])
+            # Extrai o campo "body" e faz o parsing do JSON contido nele
+            raw_body = response.json().get("body")
+            if not raw_body:
+                logger.error("Resposta da API externa não contém o campo 'body'.")
+                raise ExternalAPIError(service="API Externa", message="Campo 'body' ausente na resposta.")
+            
+            data = json.loads(raw_body).get("clientes", [])
             logger.info(f"{len(data)} pessoas encontradas na API externa.")
 
             # Inicializa o utilitário de criptografia
             encryption = EncryptionUtils()
 
             imported_count = 0
+            skipped_count = 0
+
             for person in data:
                 try:
+                    # Verificar se o e-mail já está cadastrado
+                    if PersonRepository.get_by_email(person["E-mail"]):
+                        logger.info(f"E-mail já cadastrado: {person['E-mail']} - Ignorando.")
+                        skipped_count += 1
+                        continue
+
                     # Insere no banco de dados com valores obrigatórios
                     PersonRepository.create({
                         "name": person["Nome"],
                         "phone": person["Telefone"],
                         "email": person["E-mail"],
                         "person_type": person["Tipo"],
-                        "registration_date": person.get("Data de Cadastro"),  # Campo opcional
-                        "password": encryption.encrypt("default_password")  # Senha padrão criptografada
+                        "registration_date": person["Data de Cadastro"], 
+                        "password": encryption.encrypt(Config.DEFAULT_PASSWORD)  # Senha padrão criptografada
                     })
                     imported_count += 1
                 except Exception as e:
                     # Continua importando os demais registros em caso de erro individual
                     logger.warning(f"Erro ao salvar a pessoa {person.get('Nome')}: {e}")
 
-            logger.info(f"Importação concluída: {imported_count} pessoas importadas.")
-            return {"message": f"{imported_count} pessoas importadas com sucesso!"}
+            logger.info(f"Importação concluída: {imported_count} pessoas importadas, {skipped_count} ignoradas.")
+            return {
+                "message": f"Importação finalizada: {imported_count} pessoas importadas, {skipped_count} ignoradas."
+            }
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Erro ao consumir a API externa: {e}")

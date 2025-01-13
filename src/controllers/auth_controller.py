@@ -22,7 +22,12 @@ class AuthController:
             if not data or not isinstance(data, dict):
                 raise ValidationError(field="data", message="Dados de entrada inválidos.")
 
-            result = AuthService.login(data)
+            email = data.get("email")
+            senha = data.get("senha")
+            if not email or not senha:
+                raise ValidationError(field="credentials", message="Email e senha são obrigatórios.")
+
+            result = AuthService.login({"email": email, "password": senha})
             logger.info("Login realizado com sucesso.")
             return jsonify(result), 200
         except ValidationError as e:
